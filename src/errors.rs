@@ -1,42 +1,94 @@
+#![allow(dead_code)]
+
+use std::error::Error as StdError;
+use std::fmt;
 use std::io::Error as IoError;
+use std::result::Result as StdResult;
 
 use dns_parser::Error as DnsPacketError;
-use failure::Fail;
 
-#[derive(Fail, Debug)]
-pub enum AppError {
-    #[fail(display = "IO error: {}", _0)]
-    IoError(IoError),
+pub type Result<T> = StdResult<T, Error>;
 
-    #[fail(display = "DNS-Packet error: {}", _0)]
-    DnsPacketError(DnsPacketError),
-
-    #[fail(display = "{}", _0)]
-    MsgError(String),
+pub(crate) fn new_error(kind: ErrorKind) -> Error {
+    Error::new(kind)
 }
 
-impl From<IoError> for AppError {
+#[derive(Debug)]
+pub struct Error(Box<ErrorKind>);
+
+impl Error {
+    pub fn new(kind: ErrorKind) -> Self {
+        Error(Box::new(kind))
+    }
+
+    pub fn kind(&self) -> &ErrorKind {
+        &self.0
+    }
+}
+
+impl From<ErrorKind> for Error {
+    fn from(kind: ErrorKind) -> Self {
+        Error::new(kind)
+    }
+}
+
+impl Into<ErrorKind> for Error {
+    fn into(self) -> ErrorKind {
+        *self.0
+    }
+}
+
+#[derive(Debug)]
+pub enum ErrorKind {
+    Io(IoError),
+    DnsPacket(DnsPacketError),
+    Msg(String),
+}
+
+impl From<IoError> for Error {
     fn from(err: IoError) -> Self {
-        AppError::IoError(err)
+        From::from(ErrorKind::Io(err))
     }
 }
 
-impl From<String> for AppError {
+impl From<String> for Error {
     fn from(msg: String) -> Self {
-        AppError::MsgError(msg)
+        From::from(ErrorKind::Msg(msg))
     }
 }
 
-impl<'a> From<&'a str> for AppError {
+impl<'a> From<&'a str> for Error {
     fn from(msg: &'a str) -> Self {
-        AppError::MsgError(msg.to_owned())
+        From::from(ErrorKind::Msg(msg.to_owned()))
     }
 }
 
-impl From<DnsPacketError> for AppError {
+impl From<DnsPacketError> for Error {
     fn from(err: DnsPacketError) -> Self {
-        AppError::DnsPacketError(err)
+        From::from(ErrorKind::DnsPacket(err))
     }
 }
 
-pub type Result<T> = std::result::Result<T, AppError>;
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        use self::ErrorKind::*;
+
+        match *self.0 {
+            Io(ref err) => Some(err),
+            DnsPacket(ref err) => Some(err),
+            Msg(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ErrorKind::*;
+
+        match *self.0 {
+            Io(ref err) => write!(f, "IO error: {}", err),
+            DnsPacket(ref err) => write!(f, "DNS-Paket error: {}", err),
+            Msg(ref msg) => write!(f, "{}", msg),
+        }
+    }
+}

@@ -6,8 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::str::FromStr;
 
 use dns_parser::{Packet, RData};
-use failure::Fail;
-use net2::{unix::UnixUdpBuilderExt, UdpBuilder};
+use net2::{UdpBuilder, unix::UnixUdpBuilderExt};
 
 use crate::errors::Result;
 
@@ -55,9 +54,6 @@ fn main() -> Result<()> {
     loop {
         if let Err(err) = listen(&listen_socket, upstream_addr, setname_ipv4, setname_ipv6) {
             error!("{}", err);
-            if let Some(cause) = err.cause() {
-                error!("{}", cause);
-            }
         }
     }
 }
