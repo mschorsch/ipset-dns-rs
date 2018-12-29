@@ -1,13 +1,15 @@
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate serde_derive;
 
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::str::FromStr;
+use std::net::{IpAddr, UdpSocket};
 
 use dns_parser::{Packet, RData};
 use net2::{UdpBuilder, unix::UnixUdpBuilderExt};
 
+use crate::cli::IntoConfig;
 use crate::errors::Result;
 
 mod ipset;
@@ -15,44 +17,38 @@ mod errors;
 mod cli;
 
 // DNS header size (nameser.h)
-const HFIXEDSZ: usize = 12; /*%< #/bytes of fixed data in header */
+const HFIXEDSZ: usize = 12; /* bytes of fixed data in header */
+const FILTER_LOG: &'static str = "IPSET_DNS_RS_LOG";
 
 fn main() -> Result<()> {
     init_logging();
 
     //
     // CLI
-    let matches = cli::build_cli().get_matches();
-
-    let daemon_mode = matches.is_present("daemon");
-    let reuse_port = matches.is_present("reuse");
-    let setname_ipv4 = matches.value_of("SETNAME").unwrap();
-    let setname_ipv6 = matches.value_of("ipv6_setname").unwrap_or(setname_ipv4);
-    let listen_port = u16::from_str(matches.value_of("PORT").unwrap()).unwrap();
-    let dns_ip = matches.value_of("dns")
-        .map_or(Ipv4Addr::new(8, 8, 8, 8) /* google dns */,
-                |ip| Ipv4Addr::from_str(ip).unwrap());
+    let cli_config: cli::Config = cli::build_cli().into_config()?;
 
     //
-    // listen und upstream adress
-    let listen_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), listen_port);
-
-    let listen_socket = UdpBuilder::new_v4()?
-        .reuse_address(reuse_port)?
-        .reuse_port(reuse_port)?
-        .bind(listen_addr)?;
-
-    let upstream_addr = SocketAddr::new(IpAddr::V4(dns_ip), 53);
-
-    if daemon_mode {
+    // Daemon
+    if cli_config.daemon_mode {
         info!("Daemon mode.");
         setup_daemon()?;
     }
 
-    info!("Using DNS '{}' ...", upstream_addr);
+    //
+    // Init listen socket
+    let listen_addr = &cli_config.listen_addr;
+
+    let listen_socket = UdpBuilder::new_v4()?
+        .reuse_address(cli_config.reuse_port)?
+        .reuse_port(cli_config.reuse_port)?
+        .bind(listen_addr)?;
+
+    //
+    // Listen
+    info!("Using DNS Server '{}' ...", &cli_config.dns_addr);
     info!("Listening on '{}' ...", listen_addr);
     loop {
-        if let Err(err) = listen(&listen_socket, upstream_addr, setname_ipv4, setname_ipv6) {
+        if let Err(err) = listen(&cli_config, &listen_socket) {
             error!("{}", err);
         }
     }
@@ -61,7 +57,7 @@ fn main() -> Result<()> {
 fn init_logging() {
     use env_logger::{Builder, Env};
 
-    let env = Env::new().filter_or("IPSET_DNS_RS_LOG", "info");
+    let env = Env::new().filter_or(FILTER_LOG, "info");
     let mut builder = Builder::from_env(env);
     builder.format(|buf, record| {
         writeln!(buf, "{}: {}", record.level(), record.args())
@@ -78,7 +74,7 @@ fn setup_daemon() -> Result<()> {
     Ok(())
 }
 
-fn listen(listen_socket: &UdpSocket, upstream_addr: SocketAddr, setname_ipv4: &str, setname_ipv6: &str) -> Result<()> {
+fn listen(cli_config: &cli::Config, listen_socket: &UdpSocket) -> Result<()> {
     // Receives a single datagram message on the listen_socket.
     // If `msg_buf` is too small to hold the message, it will be cut off.
     let mut msg_buf = [0; 512];
@@ -88,7 +84,7 @@ fn listen(listen_socket: &UdpSocket, upstream_addr: SocketAddr, setname_ipv4: &s
     }
 
     let upstream_socket = UdpSocket::bind("0.0.0.0:0")?; // TODO always recreate? is it correct?
-    let _upstream_send = upstream_socket.send_to(&msg_buf[..received], upstream_addr)?;
+    let _upstream_send = upstream_socket.send_to(&msg_buf[..received], &cli_config.dns_addr)?;
     let received = upstream_socket.recv(&mut msg_buf)?;
     if received < HFIXEDSZ {
         return Err(From::from("Did not receive full DNS header from upstream."));
@@ -97,9 +93,31 @@ fn listen(listen_socket: &UdpSocket, upstream_addr: SocketAddr, setname_ipv4: &s
     let packet = Packet::parse(&msg_buf[..received])?;
 
     for answer in packet.answers {
+        let dns_name = answer.name.to_string();
+
         match answer.data {
-            RData::A(a) => ipset::add_to_ipset(IpAddr::V4(a.0), setname_ipv4)?,
-            RData::AAAA(aaaa) => ipset::add_to_ipset(IpAddr::V6(aaaa.0), setname_ipv6)?,
+            RData::A(a) => {
+                let setnames = cli_config.find_setnames_ipv4(&dns_name);
+
+                if log_enabled!(log::Level::Debug) && setnames.is_empty() {
+                    debug!("No setname found for '{}'.", a.0);
+                }
+
+                for setname in setnames {
+                    ipset::add_to_ipset(IpAddr::V4(a.0), setname)?;
+                }
+            }
+            RData::AAAA(aaaa) => {
+                let setnames = cli_config.find_setnames_ipv6(&dns_name);
+
+                if log_enabled!(log::Level::Debug) && setnames.is_empty() {
+                    debug!("No setname found for '{}'.", aaaa.0);
+                }
+
+                for setname in setnames {
+                    ipset::add_to_ipset(IpAddr::V6(aaaa.0), setname)?;
+                }
+            }
             _ => (),
         }
     }
@@ -109,4 +127,3 @@ fn listen(listen_socket: &UdpSocket, upstream_addr: SocketAddr, setname_ipv4: &s
 
     Ok(())
 }
-

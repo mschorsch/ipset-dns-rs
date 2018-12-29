@@ -6,6 +6,9 @@ use std::io::Error as IoError;
 use std::result::Result as StdResult;
 
 use dns_parser::Error as DnsPacketError;
+use glob::PatternError as GlobPatternError;
+use regex::Error as RegexError;
+use toml::de::Error as TomlError;
 
 pub type Result<T> = StdResult<T, Error>;
 
@@ -42,6 +45,9 @@ impl Into<ErrorKind> for Error {
 pub enum ErrorKind {
     Io(IoError),
     DnsPacket(DnsPacketError),
+    Toml(TomlError),
+    GlobPattern(GlobPatternError),
+    Regex(RegexError),
     Msg(String),
 }
 
@@ -69,6 +75,24 @@ impl From<DnsPacketError> for Error {
     }
 }
 
+impl From<TomlError> for Error {
+    fn from(err: TomlError) -> Self {
+        From::from(ErrorKind::Toml(err))
+    }
+}
+
+impl From<GlobPatternError> for Error {
+    fn from(err: GlobPatternError) -> Self {
+        From::from(ErrorKind::GlobPattern(err))
+    }
+}
+
+impl From<RegexError> for Error {
+    fn from(err: RegexError) -> Self {
+        From::from(ErrorKind::Regex(err))
+    }
+}
+
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         use self::ErrorKind::*;
@@ -76,6 +100,9 @@ impl StdError for Error {
         match *self.0 {
             Io(ref err) => Some(err),
             DnsPacket(ref err) => Some(err),
+            Toml(ref err) => Some(err),
+            GlobPattern(ref err) => Some(err),
+            Regex(ref err) => Some(err),
             Msg(_) => None,
         }
     }
@@ -88,6 +115,9 @@ impl fmt::Display for Error {
         match *self.0 {
             Io(ref err) => write!(f, "IO error: {}", err),
             DnsPacket(ref err) => write!(f, "DNS-Paket error: {}", err),
+            Toml(ref err) => write!(f, "TOML error: {}", err),
+            GlobPattern(ref err) => write!(f, "Glob-Pattern error: {}", err),
+            Regex(ref err) => write!(f, "Regex error: {}", err),
             Msg(ref msg) => write!(f, "{}", msg),
         }
     }

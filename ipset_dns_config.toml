@@ -1,0 +1,21 @@
+#
+# ipset-dns-rs configuration file
+#
+
+# IPv4 setnames
+#
+# Format:
+# setname = [list of patterns]
+[ipv4]
+youtube = ['youtube.com']
+microsoft = ['g:*microsoft.com']
+google = ['r:^.*google\.(com|uk|de)$']
+
+# IPv6 setnames
+#
+# Format:
+# setname = [list of patterns]
+[ipv6]
+youtube = ['youtube.com']
+microsoft = ['g:*microsoft.com']
+google = ['r:^.*google\.(com|uk|de)$']
